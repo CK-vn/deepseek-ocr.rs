@@ -3,6 +3,8 @@
 #[macro_use]
 extern crate rocket;
 
+mod bbox;
+
 use std::{
     path::{Path, PathBuf},
     pin::Pin,
@@ -597,6 +599,12 @@ async fn responses_endpoint(
             content: vec![ResponseContent {
                 r#type: "output_text".into(),
                 text: generation.text.clone(),
+                bounding_boxes: if generation.bounding_boxes.is_empty() {
+                    None
+                } else {
+                    Some(generation.bounding_boxes.clone())
+                },
+                annotated_image: generation.annotated_image.clone(),
             }],
         }],
         usage: Usage {
@@ -657,6 +665,12 @@ async fn chat_completions_endpoint(
             message: ChatMessageResponse {
                 role: "assistant".into(),
                 content: generation.text.clone(),
+                bounding_boxes: if generation.bounding_boxes.is_empty() {
+                    None
+                } else {
+                    Some(generation.bounding_boxes.clone())
+                },
+                annotated_image: generation.annotated_image.clone(),
             },
             finish_reason: "stop".into(),
         }],
@@ -811,10 +825,44 @@ fn generate_blocking(
         controller.finalize(&normalized, input_len, generated_tokens.len());
     }
 
+    // Extract bounding boxes from the output
+    let bounding_boxes = bbox::extract_bounding_boxes(&normalized)
+        .unwrap_or_else(|err| {
+            eprintln!("[bbox] failed to extract bounding boxes: {err}");
+            Vec::new()
+        });
+
+    // Generate annotated image if we have boxes and an input image
+    let annotated_image = if !bounding_boxes.is_empty() && !images.is_empty() {
+        match bbox::draw_bounding_boxes(&images[0], &bounding_boxes) {
+            Ok(annotated) => {
+                // Encode as base64 JPEG
+                let mut buffer = Vec::new();
+                if let Ok(()) = annotated.write_to(&mut std::io::Cursor::new(&mut buffer), image::ImageFormat::Jpeg) {
+                    Some(base64::engine::general_purpose::STANDARD.encode(&buffer))
+                } else {
+                    eprintln!("[bbox] failed to encode annotated image");
+                    None
+                }
+            }
+            Err(err) => {
+                eprintln!("[bbox] failed to draw bounding boxes: {err}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Clean text by removing bbox tags
+    let clean_text = bbox::strip_bbox_tags(&normalized);
+
     Ok(GenerationResult {
-        text: normalized,
+        text: clean_text,
         prompt_tokens: input_len,
         response_tokens: generated_tokens.len(),
+        bounding_boxes,
+        annotated_image,
     })
 }
 
@@ -877,7 +925,10 @@ fn convert_messages(messages: &[ApiMessage]) -> Result<(String, Vec<DynamicImage
 
 fn flatten_content(content: &MessageContent) -> Result<(String, Vec<DynamicImage>), ApiError> {
     match content {
-        MessageContent::Text(text) => Ok((text.trim().to_owned(), Vec::new())),
+        MessageContent::Text(text) => {
+            let processed = ensure_grounding_enabled(text.trim());
+            Ok((processed, Vec::new()))
+        }
         MessageContent::Parts(parts) => {
             let mut buffer = String::new();
             let mut images = Vec::new();
@@ -895,8 +946,42 @@ fn flatten_content(content: &MessageContent) -> Result<(String, Vec<DynamicImage
                     }
                 }
             }
-            Ok((buffer.trim().to_owned(), images))
+            let processed = ensure_grounding_enabled(buffer.trim());
+            Ok((processed, images))
         }
+    }
+}
+
+fn ensure_grounding_enabled(text: &str) -> String {
+    // If the prompt already contains grounding tags or specific task instructions, leave it as-is
+    if text.contains("<|grounding|>") 
+        || text.contains("<|ref|>") 
+        || text.contains("Free OCR")
+        || text.contains("Parse the figure")
+        || text.contains("Locate ")
+    {
+        return text.to_owned();
+    }
+    
+    // If prompt starts with <image>, inject grounding after it
+    if text.starts_with("<image>") {
+        let rest = text.strip_prefix("<image>").unwrap_or(text);
+        let rest = rest.trim_start_matches('\n').trim_start();
+        
+        // If there's actual content after <image>, add grounding before it
+        if !rest.is_empty() {
+            return format!("<image>\n<|grounding|>{}", rest);
+        } else {
+            // If only <image> tag, add default grounding instruction
+            return "<image>\n<|grounding|>Convert the document to markdown.".to_owned();
+        }
+    }
+    
+    // If no <image> tag, add both <image> and grounding
+    if text.is_empty() {
+        "<image>\n<|grounding|>Convert the document to markdown.".to_owned()
+    } else {
+        format!("<image>\n<|grounding|>{}", text)
     }
 }
 
@@ -1011,6 +1096,10 @@ struct ResponseContent {
     #[serde(rename = "type")]
     r#type: String,
     text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bounding_boxes: Option<Vec<bbox::BoundingBox>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    annotated_image: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1034,6 +1123,10 @@ struct ChatChoice {
 struct ChatMessageResponse {
     role: String,
     content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bounding_boxes: Option<Vec<bbox::BoundingBox>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    annotated_image: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1055,6 +1148,8 @@ struct GenerationResult {
     text: String,
     prompt_tokens: usize,
     response_tokens: usize,
+    bounding_boxes: Vec<bbox::BoundingBox>,
+    annotated_image: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

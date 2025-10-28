@@ -1,5 +1,3 @@
-> 中文文档请见 [README_CN.md](README_CN.md)。
-
 The `deepseek-ocr-server` binary exposes the model behind an OpenAI-compatible HTTP API (`/v1/responses`, `/v1/chat/completions`, `/v1/models`). Use it when you need streaming output or to integrate with tools such as Open WebUI.
 
 ```bash

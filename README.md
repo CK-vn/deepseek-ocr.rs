@@ -2,8 +2,6 @@
 
 Rust implementation of the DeepSeek-OCR inference stack with a fast CLI and an OpenAI-compatible HTTP server. The workspace packages the vision-language model, prompt tooling, and serving layer so you can build document understanding pipelines that run locally on CPU, Apple Metal, or (alpha) NVIDIA CUDA GPUs.
 
-> 中文文档请看 [README_CN.md](README_CN.md)。  
-
 
 > Want ready-made binaries? Latest macOS (Metal-enabled) and Windows bundles live in the [build-binaries workflow artifacts](https://github.com/TimmyOVO/deepseek-ocr.rs/actions/workflows/build-binaries.yml). Grab them from the newest green run.
 
@@ -37,6 +35,7 @@ The original DeepSeek-OCR ships as a Python + Transformers stack—powerful, but
 ## Highlights ✨
 - **One repo, two entrypoints** – a batteries-included CLI for batch jobs and a Rocket-based server that speaks `/v1/responses` and `/v1/chat/completions`.
 - **Works out of the box** – pulls model weights, configs, and tokenizer from whichever of Hugging Face or ModelScope responds fastest on first run.
+- **Bounding box extraction & visualization** – automatically enables grounding mode by default to extract bounding box coordinates and return annotated images with drawn boxes. See [docs/BOUNDING_BOXES.md](docs/BOUNDING_BOXES.md) and [docs/DEFAULT_GROUNDING.md](docs/DEFAULT_GROUNDING.md) for details.
 - **Optimised for Apple Silicon** – optional Metal backend with FP16 execution for real-time OCR on laptops.
 - **CUDA (alpha)** – experimental support via `--features cuda` + `--device cuda --dtype f16`; expect rough edges while we finish kernel coverage.
 - **OpenAI client compatibility** – drop-in replacement for popular SDKs; the server automatically collapses chat history to the latest user turn for OCR-friendly prompts.

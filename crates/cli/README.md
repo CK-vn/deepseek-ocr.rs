@@ -1,5 +1,3 @@
-> 中文文档请见 [README_CN.md](README_CN.md)。
-
 The `deepseek-ocr-cli` binary drives the full multimodal pipeline from the terminal. It accepts a text prompt with `<image>` placeholders, projects one or more images into vision embeddings, and then autoregressively generates markdown output. Run it directly from the workspace or after `cargo install --path crates/cli`.
 
 ```bash

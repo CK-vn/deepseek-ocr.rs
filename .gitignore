@@ -1,6 +1,89 @@
-.idea
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# IDE
+.idea/
 *.iml
-target
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
-DeepSeek-OCR
-baselines/sample
+Thumbs.db
+
+# Project specific
+DeepSeek-OCR/
+baselines/sample/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Terraform SSH keys
+*.pem
+*.key
+
+# AWS
+.aws/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Test outputs
+test/output_*.jpg
+test/output_*.png
+test/bbox_results.json
+test/temp_crops/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+.cache/
+
+# Kiro (IDE specific)
+.kiro/
+
+# Model files (large)
+*.safetensors
+*.bin
+*.onnx
+*.pt
+*.pth
+
+# HuggingFace cache
+.cache/huggingface/
+
+# Documentation builds
+docs/_build/
+site/
