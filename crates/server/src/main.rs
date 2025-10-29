@@ -897,7 +897,7 @@ fn convert_messages(messages: &[ApiMessage]) -> Result<(String, Vec<DynamicImage
     let mut sections = Vec::new();
     let mut all_images = Vec::new();
 
-    // OCR模型不是为对话训练的，所以只保留一轮的prompt，留多轮连正常输出都产生不了
+    // Process system messages
     for message in &messages[..latest_user_idx] {
         if message.role.eq_ignore_ascii_case("system") {
             let (text, mut msg_images) = flatten_content(&message.content)?;
@@ -908,6 +908,7 @@ fn convert_messages(messages: &[ApiMessage]) -> Result<(String, Vec<DynamicImage
         }
     }
 
+    // Process user message
     let (user_text, mut user_images) = flatten_content(&messages[latest_user_idx].content)?;
     if !user_text.is_empty() {
         sections.push(user_text);
@@ -920,61 +921,18 @@ fn convert_messages(messages: &[ApiMessage]) -> Result<(String, Vec<DynamicImage
         ));
     }
 
+    // Build prompt - user is responsible for including <image> tags
     let mut prompt = String::from("<|User|>\n");
-    
-    // Build the prompt body
     let body = sections.join("\n\n");
     
-    // Ensure <image> tag is present when we have images
-    if !all_images.is_empty() {
-        let num_images = all_images.len();
-        
-        // Remove any existing <image> tags from body to avoid duplicates
-        let body_without_image_tags = body.replace("<image>", "").trim().to_string();
-        
-        eprintln!("DEBUG: num_images={}, body_before_strip={:?}, body_after_strip={:?}", 
-                  num_images, body, body_without_image_tags);
-        
-        // Add exactly one <image> tag per image at the beginning
-        for _ in 0..num_images {
-            prompt.push_str("<image>");
-        }
-        prompt.push('\n');
-        
-        // Add the body content
-        if !body_without_image_tags.is_empty() {
-            // If body doesn't have grounding tag and doesn't have special instructions, add grounding
-            if !body_without_image_tags.contains("<|grounding|>") 
-                && !body_without_image_tags.contains("<|ref|>") 
-                && !body_without_image_tags.contains("Free OCR")
-                && !body_without_image_tags.contains("Parse the figure")
-                && !body_without_image_tags.contains("Locate ") {
-                prompt.push_str("<|grounding|>");
-            }
-            prompt.push_str(&body_without_image_tags);
-            if !body_without_image_tags.ends_with('\n') {
-                prompt.push('\n');
-            }
-        } else {
-            // No user text, use default grounding prompt
-            prompt.push_str("<|grounding|>Convert the document to markdown.\n");
-        }
-    } else {
-        // No images, just add the text body
-        if !body.is_empty() {
-            prompt.push_str(&body);
-            if !body.ends_with('\n') {
-                prompt.push('\n');
-            }
+    if !body.is_empty() {
+        prompt.push_str(&body);
+        if !body.ends_with('\n') {
+            prompt.push('\n');
         }
     }
     
     prompt.push_str("<|Assistant|>\n");
-    
-    // Debug: count <image> tags in final prompt
-    let image_tag_count = prompt.matches("<image>").count();
-    eprintln!("DEBUG: final_prompt has {} <image> tags, {} actual images", 
-              image_tag_count, all_images.len());
     
     Ok((prompt, all_images))
 }
@@ -982,60 +940,32 @@ fn convert_messages(messages: &[ApiMessage]) -> Result<(String, Vec<DynamicImage
 fn flatten_content(content: &MessageContent) -> Result<(String, Vec<DynamicImage>), ApiError> {
     match content {
         MessageContent::Text(text) => {
-            // Remove any <image> placeholders from the text as they will be added programmatically
-            let cleaned = text.replace("<image>", "");
-            let processed = ensure_grounding_enabled(cleaned.trim());
-            Ok((processed, Vec::new()))
+            Ok((text.trim().to_string(), Vec::new()))
         }
         MessageContent::Parts(parts) => {
             let mut text_parts = Vec::new();
             let mut images = Vec::new();
             
-            // Process parts in order to preserve text and image sequence
             for part in parts {
                 match part {
                     MessagePart::ImageUrl { image_url } | MessagePart::InputImage { image_url } => {
                         images.push(load_image(image_url)?);
                     }
                     MessagePart::Text { text } | MessagePart::InputText { text } => {
-                        // Remove any <image> placeholders from the text as they will be added programmatically
-                        let cleaned = text.replace("<image>", "").trim().to_string();
-                        if !cleaned.is_empty() {
-                            text_parts.push(cleaned);
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() {
+                            text_parts.push(trimmed.to_string());
                         }
                     }
                 }
             }
             
-            // Combine text parts
-            let combined_text = text_parts.join("\n");
-            let processed = ensure_grounding_enabled(&combined_text);
-            
-            Ok((processed, images))
+            Ok((text_parts.join("\n"), images))
         }
     }
 }
 
-fn ensure_grounding_enabled(text: &str) -> String {
-    // If the prompt already contains grounding tags or specific task instructions, leave it as-is
-    if text.contains("<|grounding|>") 
-        || text.contains("<|ref|>") 
-        || text.contains("Free OCR")
-        || text.contains("Parse the figure")
-        || text.contains("Locate ")
-    {
-        return text.to_owned();
-    }
-    
-    // If text is empty, return default grounding prompt (will be handled by caller to add <image>)
-    if text.is_empty() {
-        return String::new();
-    }
-    
-    // If user provided custom text, preserve it as-is
-    // The <image> tag will be added by flatten_content if needed
-    text.to_owned()
-}
+
 
 fn load_image(spec: &ImagePayload) -> Result<DynamicImage, ApiError> {
     let url = spec.url();
