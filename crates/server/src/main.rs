@@ -854,11 +854,9 @@ fn generate_blocking(
         None
     };
 
-    // Clean text by removing bbox tags
-    let clean_text = bbox::strip_bbox_tags(&normalized);
-
+    // Return raw model output with all markup tags preserved
     Ok(GenerationResult {
-        text: clean_text,
+        text: normalized,
         prompt_tokens: input_len,
         response_tokens: generated_tokens.len(),
         bounding_boxes,
@@ -912,13 +910,53 @@ fn convert_messages(messages: &[ApiMessage]) -> Result<(String, Vec<DynamicImage
     }
 
     let mut prompt = String::from("<|User|>\n");
+    
+    // Build the prompt body
     let body = sections.join("\n\n");
-    if !body.is_empty() {
-        prompt.push_str(&body);
-        if !body.ends_with('\n') {
-            prompt.push('\n');
+    
+    // Ensure <image> tag is present when we have images
+    if !all_images.is_empty() {
+        // Count existing <image> tags in the body
+        let existing_image_tags = body.matches("<image>").count();
+        let num_images = all_images.len();
+        
+        // Remove any existing <image> tags from body to avoid duplicates
+        let body_without_image_tags = body.replace("<image>", "").trim().to_string();
+        
+        // Add exactly one <image> tag per image at the beginning
+        for _ in 0..num_images {
+            prompt.push_str("<image>");
+        }
+        prompt.push('\n');
+        
+        // Add the body content
+        if !body_without_image_tags.is_empty() {
+            // If body doesn't have grounding tag and doesn't have special instructions, add grounding
+            if !body_without_image_tags.contains("<|grounding|>") 
+                && !body_without_image_tags.contains("<|ref|>") 
+                && !body_without_image_tags.contains("Free OCR")
+                && !body_without_image_tags.contains("Parse the figure")
+                && !body_without_image_tags.contains("Locate ") {
+                prompt.push_str("<|grounding|>");
+            }
+            prompt.push_str(&body_without_image_tags);
+            if !body_without_image_tags.ends_with('\n') {
+                prompt.push('\n');
+            }
+        } else {
+            // No user text, use default grounding prompt
+            prompt.push_str("<|grounding|>Convert the document to markdown.\n");
+        }
+    } else {
+        // No images, just add the text body
+        if !body.is_empty() {
+            prompt.push_str(&body);
+            if !body.ends_with('\n') {
+                prompt.push('\n');
+            }
         }
     }
+    
     prompt.push_str("<|Assistant|>\n");
     Ok((prompt, all_images))
 }
@@ -930,23 +968,30 @@ fn flatten_content(content: &MessageContent) -> Result<(String, Vec<DynamicImage
             Ok((processed, Vec::new()))
         }
         MessageContent::Parts(parts) => {
-            let mut buffer = String::new();
+            let mut text_parts = Vec::new();
             let mut images = Vec::new();
-            for part in parts.iter().rev() {
+            let mut has_image = false;
+            
+            // Process parts in order to preserve text and image sequence
+            for part in parts {
                 match part {
                     MessagePart::ImageUrl { image_url } | MessagePart::InputImage { image_url } => {
-                        buffer.push_str("<image>");
+                        has_image = true;
                         images.push(load_image(image_url)?);
                     }
                     MessagePart::Text { text } | MessagePart::InputText { text } => {
-                        if !buffer.is_empty() {
-                            buffer.push('\n');
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() {
+                            text_parts.push(trimmed);
                         }
-                        buffer.push_str(text);
                     }
                 }
             }
-            let processed = ensure_grounding_enabled(buffer.trim());
+            
+            // Combine text parts
+            let combined_text = text_parts.join("\n");
+            let processed = ensure_grounding_enabled(&combined_text);
+            
             Ok((processed, images))
         }
     }
@@ -963,26 +1008,14 @@ fn ensure_grounding_enabled(text: &str) -> String {
         return text.to_owned();
     }
     
-    // If prompt starts with <image>, inject grounding after it
-    if text.starts_with("<image>") {
-        let rest = text.strip_prefix("<image>").unwrap_or(text);
-        let rest = rest.trim_start_matches('\n').trim_start();
-        
-        // If there's actual content after <image>, add grounding before it
-        if !rest.is_empty() {
-            return format!("<image>\n<|grounding|>{}", rest);
-        } else {
-            // If only <image> tag, add default grounding instruction
-            return "<image>\n<|grounding|>Convert the document to markdown.".to_owned();
-        }
+    // If text is empty, return default grounding prompt (will be handled by caller to add <image>)
+    if text.is_empty() {
+        return String::new();
     }
     
-    // If no <image> tag, add both <image> and grounding
-    if text.is_empty() {
-        "<image>\n<|grounding|>Convert the document to markdown.".to_owned()
-    } else {
-        format!("<image>\n<|grounding|>{}", text)
-    }
+    // If user provided custom text, preserve it as-is
+    // The <image> tag will be added by flatten_content if needed
+    text.to_owned()
 }
 
 fn load_image(spec: &ImagePayload) -> Result<DynamicImage, ApiError> {
