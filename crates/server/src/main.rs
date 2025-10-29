@@ -621,6 +621,17 @@ async fn chat_completions_endpoint(
     state: &State<AppState>,
     req: Json<ChatCompletionRequest>,
 ) -> Result<Either<Json<ChatCompletionResponse>, BoxEventStream>, ApiError> {
+    // Debug: log the incoming request
+    eprintln!("DEBUG: Received chat completion request with {} messages", req.messages.len());
+    for (idx, msg) in req.messages.iter().enumerate() {
+        eprintln!("DEBUG: Message {}: role={}, content_type={}", 
+                  idx, msg.role, 
+                  match &msg.content {
+                      MessageContent::Text(_) => "text",
+                      MessageContent::Parts(parts) => &format!("parts({})", parts.len()),
+                  });
+    }
+    
     ensure_model(&req.model, &state.model_id)?;
     let gen_inputs = GenerationInputs::from_state(state);
     let (prompt, images) = convert_messages(&req.messages)?;
@@ -1287,6 +1298,9 @@ struct ErrorDetail {
 
 impl<'r> Responder<'r, 'static> for ApiError {
     fn respond_to(self, request: &'r rocket::Request<'_>) -> rocket::response::Result<'static> {
+        // Log the error to stderr
+        eprintln!("ERROR: {} - {}", request.uri(), self);
+        
         let (status, error_type) = match self {
             ApiError::BadRequest(_) => (Status::BadRequest, "invalid_request_error"),
             ApiError::Internal(_) => (Status::InternalServerError, "internal_error"),
