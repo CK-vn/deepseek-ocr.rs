@@ -921,6 +921,9 @@ fn convert_messages(messages: &[ApiMessage]) -> Result<(String, Vec<DynamicImage
         // Remove any existing <image> tags from body to avoid duplicates
         let body_without_image_tags = body.replace("<image>", "").trim().to_string();
         
+        eprintln!("DEBUG: num_images={}, body_before_strip={:?}, body_after_strip={:?}", 
+                  num_images, body, body_without_image_tags);
+        
         // Add exactly one <image> tag per image at the beginning
         for _ in 0..num_images {
             prompt.push_str("<image>");
@@ -956,6 +959,12 @@ fn convert_messages(messages: &[ApiMessage]) -> Result<(String, Vec<DynamicImage
     }
     
     prompt.push_str("<|Assistant|>\n");
+    
+    // Debug: count <image> tags in final prompt
+    let image_tag_count = prompt.matches("<image>").count();
+    eprintln!("DEBUG: final_prompt has {} <image> tags, {} actual images", 
+              image_tag_count, all_images.len());
+    
     Ok((prompt, all_images))
 }
 
