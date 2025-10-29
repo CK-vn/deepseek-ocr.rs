@@ -8,7 +8,7 @@ use image::{DynamicImage, Rgba, RgbaImage};
 use imageproc::drawing::{draw_hollow_rect_mut, draw_text_mut};
 use imageproc::rect::Rect;
 use regex::Regex;
-use rusttype::{Font, Scale};
+use ab_glyph::{FontRef, PxScale};
 use serde::{Deserialize, Serialize};
 
 /// A bounding box with optional reference text
@@ -140,10 +140,10 @@ pub fn draw_bounding_boxes(
     
     // Load a basic font (embedded in the binary)
     let font_data = include_bytes!("../../../assets/DejaVuSans.ttf");
-    let font = Font::try_from_bytes(font_data as &[u8])
-        .ok_or_else(|| anyhow!("failed to load font"))?;
+    let font = FontRef::try_from_slice(font_data)
+        .map_err(|e| anyhow!("failed to load font: {}", e))?;
     
-    let scale = Scale::uniform(16.0);
+    let scale = PxScale::from(16.0);
     
     // Color palette for boxes
     let colors = [
@@ -260,6 +260,190 @@ mod tests {
     }
     
     #[test]
+    fn test_extract_boxes_mixed_formats() {
+        // Test that both grounding and legacy formats can coexist
+        let text = "Start <|ref|>New Format<|/ref|><|det|>[[10, 20, 30, 40]]<|/det|> middle <ref>Old Format</ref><box>[[50,60],[70,80]]</box> end";
+        let boxes = extract_bounding_boxes(text).unwrap();
+        
+        assert_eq!(boxes.len(), 2);
+        
+        // First box should be grounding format
+        assert_eq!(boxes[0].x1, 10.0);
+        assert_eq!(boxes[0].y1, 20.0);
+        assert_eq!(boxes[0].x2, 30.0);
+        assert_eq!(boxes[0].y2, 40.0);
+        assert_eq!(boxes[0].text, Some("New Format".to_string()));
+        
+        // Second box should be legacy format
+        assert_eq!(boxes[1].x1, 50.0);
+        assert_eq!(boxes[1].y1, 60.0);
+        assert_eq!(boxes[1].x2, 70.0);
+        assert_eq!(boxes[1].y2, 80.0);
+        assert_eq!(boxes[1].text, Some("Old Format".to_string()));
+    }
+    
+    #[test]
+    fn test_extract_boxes_grounding_standalone() {
+        // Test standalone detection boxes without reference text
+        let text = "Text before <|det|>[[100, 200, 300, 400]]<|/det|> text after";
+        let boxes = extract_bounding_boxes(text).unwrap();
+        
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].x1, 100.0);
+        assert_eq!(boxes[0].y1, 200.0);
+        assert_eq!(boxes[0].x2, 300.0);
+        assert_eq!(boxes[0].y2, 400.0);
+        assert_eq!(boxes[0].text, None);
+    }
+    
+    #[test]
+    fn test_extract_boxes_legacy_standalone() {
+        // Test standalone legacy boxes without reference text
+        let text = "Text before <box>[[100,200],[300,400]]</box> text after";
+        let boxes = extract_bounding_boxes(text).unwrap();
+        
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].x1, 100.0);
+        assert_eq!(boxes[0].y1, 200.0);
+        assert_eq!(boxes[0].x2, 300.0);
+        assert_eq!(boxes[0].y2, 400.0);
+        assert_eq!(boxes[0].text, None);
+    }
+    
+    #[test]
+    fn test_extract_boxes_no_boxes() {
+        // Test text with no bounding boxes
+        let text = "Just some plain text without any boxes";
+        let boxes = extract_bounding_boxes(text).unwrap();
+        
+        assert_eq!(boxes.len(), 0);
+    }
+    
+    #[test]
+    fn test_extract_boxes_with_spaces() {
+        // Test that spaces in coordinates are handled correctly
+        let text = "<|det|>[[  100  ,  200  ,  300  ,  400  ]]<|/det|>";
+        let boxes = extract_bounding_boxes(text).unwrap();
+        
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].x1, 100.0);
+        assert_eq!(boxes[0].y1, 200.0);
+        assert_eq!(boxes[0].x2, 300.0);
+        assert_eq!(boxes[0].y2, 400.0);
+    }
+    
+    #[test]
+    fn test_bounding_box_to_pixels() {
+        let bbox = BoundingBox {
+            x1: 100.0,
+            y1: 200.0,
+            x2: 300.0,
+            y2: 400.0,
+            text: None,
+        };
+        
+        // Test conversion with 1000x1000 image
+        let (x1, y1, x2, y2) = bbox.to_pixels(1000, 1000);
+        assert_eq!(x1, 100);
+        assert_eq!(y1, 200);
+        assert_eq!(x2, 300);
+        assert_eq!(y2, 400);
+        
+        // Test conversion with 2000x2000 image (should scale up)
+        let (x1, y1, x2, y2) = bbox.to_pixels(2000, 2000);
+        assert_eq!(x1, 200);
+        assert_eq!(y1, 400);
+        assert_eq!(x2, 600);
+        assert_eq!(y2, 800);
+        
+        // Test conversion with 500x500 image (should scale down)
+        let (x1, y1, x2, y2) = bbox.to_pixels(500, 500);
+        assert_eq!(x1, 50);
+        assert_eq!(y1, 100);
+        assert_eq!(x2, 150);
+        assert_eq!(y2, 200);
+    }
+    
+    #[test]
+    fn test_draw_bounding_boxes_creates_image() {
+        // Create a simple test image
+        let img = DynamicImage::new_rgb8(800, 600);
+        
+        let boxes = vec![
+            BoundingBox {
+                x1: 100.0,
+                y1: 100.0,
+                x2: 300.0,
+                y2: 200.0,
+                text: Some("Test Box".to_string()),
+            },
+        ];
+        
+        // Draw boxes on the image
+        let result = draw_bounding_boxes(&img, &boxes);
+        
+        // Should succeed
+        assert!(result.is_ok());
+        
+        let annotated = result.unwrap();
+        
+        // Image dimensions should be preserved
+        assert_eq!(annotated.width(), 800);
+        assert_eq!(annotated.height(), 600);
+    }
+    
+    #[test]
+    fn test_draw_bounding_boxes_empty() {
+        // Create a simple test image
+        let img = DynamicImage::new_rgb8(800, 600);
+        
+        // Empty boxes array
+        let boxes = vec![];
+        
+        // Draw boxes on the image
+        let result = draw_bounding_boxes(&img, &boxes);
+        
+        // Should succeed even with no boxes
+        assert!(result.is_ok());
+    }
+    
+    #[test]
+    fn test_draw_bounding_boxes_multiple() {
+        // Create a simple test image
+        let img = DynamicImage::new_rgb8(800, 600);
+        
+        let boxes = vec![
+            BoundingBox {
+                x1: 100.0,
+                y1: 100.0,
+                x2: 300.0,
+                y2: 200.0,
+                text: Some("Box 1".to_string()),
+            },
+            BoundingBox {
+                x1: 400.0,
+                y1: 300.0,
+                x2: 600.0,
+                y2: 500.0,
+                text: Some("Box 2".to_string()),
+            },
+            BoundingBox {
+                x1: 50.0,
+                y1: 50.0,
+                x2: 150.0,
+                y2: 150.0,
+                text: None,
+            },
+        ];
+        
+        // Draw boxes on the image
+        let result = draw_bounding_boxes(&img, &boxes);
+        
+        // Should succeed with multiple boxes
+        assert!(result.is_ok());
+    }
+    
+    #[test]
     fn test_strip_tags_grounding() {
         let text = "Text <|ref|>Label<|/ref|><|det|>[[1, 2, 3, 4]]<|/det|> and <|det|>[[5, 6, 7, 8]]<|/det|> end";
         let stripped = strip_bbox_tags(text);
@@ -271,5 +455,19 @@ mod tests {
         let text = "Text <ref>Label</ref><box>[[1,2],[3,4]]</box> and <box>[[5,6],[7,8]]</box> end";
         let stripped = strip_bbox_tags(text);
         assert_eq!(stripped, "Text Label and  end");
+    }
+    
+    #[test]
+    fn test_strip_tags_mixed() {
+        let text = "Start <|ref|>New<|/ref|><|det|>[[1,2,3,4]]<|/det|> and <ref>Old</ref><box>[[5,6],[7,8]]</box> end";
+        let stripped = strip_bbox_tags(text);
+        assert_eq!(stripped, "Start New and Old end");
+    }
+    
+    #[test]
+    fn test_strip_tags_no_tags() {
+        let text = "Just plain text without any tags";
+        let stripped = strip_bbox_tags(text);
+        assert_eq!(stripped, "Just plain text without any tags");
     }
 }

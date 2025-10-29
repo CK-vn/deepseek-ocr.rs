@@ -916,8 +916,6 @@ fn convert_messages(messages: &[ApiMessage]) -> Result<(String, Vec<DynamicImage
     
     // Ensure <image> tag is present when we have images
     if !all_images.is_empty() {
-        // Count existing <image> tags in the body
-        let existing_image_tags = body.matches("<image>").count();
         let num_images = all_images.len();
         
         // Remove any existing <image> tags from body to avoid duplicates
@@ -970,13 +968,11 @@ fn flatten_content(content: &MessageContent) -> Result<(String, Vec<DynamicImage
         MessageContent::Parts(parts) => {
             let mut text_parts = Vec::new();
             let mut images = Vec::new();
-            let mut has_image = false;
             
             // Process parts in order to preserve text and image sequence
             for part in parts {
                 match part {
                     MessagePart::ImageUrl { image_url } | MessagePart::InputImage { image_url } => {
-                        has_image = true;
                         images.push(load_image(image_url)?);
                     }
                     MessagePart::Text { text } | MessagePart::InputText { text } => {
