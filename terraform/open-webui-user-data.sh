@@ -41,9 +41,29 @@ docker run -d \
   --restart always \
   ghcr.io/open-webui/open-webui:main
 
-# Wait for container to be healthy
+# Wait for container to be healthy and responding
 echo "Waiting for Open WebUI to start..."
-sleep 30
+MAX_WAIT=300  # 5 minutes
+ELAPSED=0
+while [ $ELAPSED -lt $MAX_WAIT ]; do
+    if curl -s http://localhost:3000/ > /dev/null 2>&1; then
+        echo "✓ Open WebUI is ready and responding!"
+        break
+    fi
+    echo "Waiting for Open WebUI... ($ELAPSED seconds elapsed)"
+    sleep 10
+    ELAPSED=$((ELAPSED + 10))
+done
+
+if [ $ELAPSED -ge $MAX_WAIT ]; then
+    echo "WARNING: Open WebUI did not become ready within $MAX_WAIT seconds"
+    echo "Container status:"
+    docker ps -a | grep open-webui
+    echo "Container logs:"
+    docker logs open-webui --tail 50
+else
+    echo "Open WebUI started successfully in $ELAPSED seconds"
+fi
 
 # Check if container is running
 if docker ps | grep -q open-webui; then

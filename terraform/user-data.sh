@@ -131,8 +131,32 @@ systemctl enable deepseek-ocr-server.service
 echo "=== Starting service ==="
 systemctl start deepseek-ocr-server.service
 
+# Wait for service to be ready
+echo "=== Waiting for service to be ready ==="
+MAX_WAIT=600  # 10 minutes
+ELAPSED=0
+while [ $ELAPSED -lt $MAX_WAIT ]; do
+    if curl -s http://localhost:8000/v1/health > /dev/null 2>&1; then
+        echo "✓ Service is ready and responding!"
+        break
+    fi
+    echo "Waiting for service... ($ELAPSED seconds elapsed)"
+    sleep 10
+    ELAPSED=$((ELAPSED + 10))
+done
+
+if [ $ELAPSED -ge $MAX_WAIT ]; then
+    echo "WARNING: Service did not become ready within $MAX_WAIT seconds"
+    echo "Checking service status and logs..."
+    systemctl status deepseek-ocr-server.service --no-pager
+    echo "Last 50 lines of service log:"
+    tail -50 /var/log/deepseek-ocr-server.log
+else
+    echo "Service started successfully in $ELAPSED seconds"
+fi
+
 # Check service status
-echo "=== Service status ==="
+echo "=== Final service status ==="
 systemctl status deepseek-ocr-server.service --no-pager
 
 echo "=== User data script completed at $(date) ==="

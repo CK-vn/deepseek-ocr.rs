@@ -9,9 +9,9 @@ output "deepseek_ocr_api_endpoint" {
   description = "DeepSeek OCR API endpoint via ALB"
 }
 
-output "deepseek_ocr_asg_name" {
-  value       = aws_autoscaling_group.deepseek_ocr.name
-  description = "DeepSeek OCR Auto Scaling Group name"
+output "deepseek_ocr_instance_id" {
+  value       = aws_instance.deepseek_ocr.id
+  description = "DeepSeek OCR EC2 instance ID"
 }
 
 output "deepseek_ocr_schedule" {
@@ -30,9 +30,9 @@ output "open_webui_url" {
   description = "Open WebUI access URL via ALB"
 }
 
-output "open_webui_asg_name" {
-  value       = aws_autoscaling_group.open_webui.name
-  description = "Open WebUI Auto Scaling Group name"
+output "open_webui_instance_id" {
+  value       = aws_instance.open_webui.id
+  description = "Open WebUI EC2 instance ID"
 }
 
 output "open_webui_schedule" {
@@ -49,4 +49,20 @@ output "ssh_key_file" {
 output "list_instances_command" {
   value       = "aws ec2 describe-instances --filters 'Name=tag:Environment,Values=demo' --query 'Reservations[*].Instances[*].[InstanceId,State.Name,PublicIpAddress,Tags[?Key==`Name`].Value|[0]]' --output table --region ${var.aws_region}"
   description = "Command to list all instances in the deployment"
+}
+
+# Scheduler outputs
+output "lambda_scheduler_function" {
+  value       = aws_lambda_function.ec2_scheduler.function_name
+  description = "Lambda function name for EC2 scheduling"
+}
+
+output "manual_stop_command" {
+  value       = "aws lambda invoke --function-name ${aws_lambda_function.ec2_scheduler.function_name} --payload '{\"action\":\"stop\"}' /tmp/response.json --region ${var.aws_region}"
+  description = "Command to manually stop instances"
+}
+
+output "manual_start_command" {
+  value       = "aws lambda invoke --function-name ${aws_lambda_function.ec2_scheduler.function_name} --payload '{\"action\":\"start\"}' /tmp/response.json --region ${var.aws_region}"
+  description = "Command to manually start instances"
 }

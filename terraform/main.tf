@@ -180,37 +180,26 @@ data "aws_ami" "ubuntu_gpu" {
   }
 }
 
-# Launch template for deepseek-ocr-server
-resource "aws_launch_template" "deepseek_ocr" {
-  name_prefix   = "deepseek-ocr-"
-  image_id      = data.aws_ami.ubuntu_gpu.id
-  instance_type = var.instance_type
-  key_name      = aws_key_pair.deepseek_ocr.key_name
-
-  iam_instance_profile {
-    name = aws_iam_instance_profile.deepseek_ocr_ssm.name
-  }
-
+# EC2 instance for deepseek-ocr-server
+resource "aws_instance" "deepseek_ocr" {
+  ami                    = data.aws_ami.ubuntu_gpu.id
+  instance_type          = var.instance_type
+  key_name               = aws_key_pair.deepseek_ocr.key_name
+  iam_instance_profile   = aws_iam_instance_profile.deepseek_ocr_ssm.name
   vpc_security_group_ids = [aws_security_group.deepseek_ocr.id]
+  user_data              = templatefile("${path.module}/user-data.sh", {})
 
-  block_device_mappings {
-    device_name = "/dev/sda1"
-    ebs {
-      volume_size           = var.root_volume_size
-      volume_type           = "gp3"
-      delete_on_termination = true
-    }
+  root_block_device {
+    volume_size           = var.root_volume_size
+    volume_type           = "gp3"
+    delete_on_termination = false
   }
 
-  user_data = base64encode(templatefile("${path.module}/user-data.sh", {}))
-
-  tag_specifications {
-    resource_type = "instance"
-    tags = {
-      Name        = "deepseek-ocr-server"
-      Environment = "demo"
-      Purpose     = "DeepSeek OCR Server with GPU acceleration"
-    }
+  tags = {
+    Name        = "deepseek-ocr-server"
+    Environment = "demo"
+    Purpose     = "DeepSeek OCR Server with GPU acceleration"
+    AutoStop    = "true"
   }
 
   depends_on = [
@@ -230,18 +219,27 @@ resource "aws_lb_target_group" "deepseek_ocr" {
   health_check {
     enabled             = true
     healthy_threshold   = 2
-    unhealthy_threshold = 3
+    unhealthy_threshold = 10
     timeout             = 10
     interval            = 30
-    path                = "/v1/models"
+    path                = "/v1/health"
     matcher             = "200"
   }
+
+  deregistration_delay = 30
 
   tags = {
     Name        = "deepseek-ocr-tg"
     Environment = "demo"
     Purpose     = "DeepSeek OCR Target Group"
   }
+}
+
+# Attach deepseek-ocr instance to target group
+resource "aws_lb_target_group_attachment" "deepseek_ocr" {
+  target_group_arn = aws_lb_target_group.deepseek_ocr.arn
+  target_id        = aws_instance.deepseek_ocr.id
+  port             = 8000
 }
 
 # Application Load Balancer for deepseek-ocr
@@ -271,60 +269,7 @@ resource "aws_lb_listener" "deepseek_ocr" {
   }
 }
 
-# Auto Scaling Group for deepseek-ocr
-resource "aws_autoscaling_group" "deepseek_ocr" {
-  name                      = "deepseek-ocr-asg"
-  vpc_zone_identifier       = data.aws_subnets.default.ids
-  target_group_arns         = [aws_lb_target_group.deepseek_ocr.arn]
-  health_check_type         = "ELB"
-  health_check_grace_period = 900
-  min_size                  = 0
-  max_size                  = 1
-  desired_capacity          = 1
 
-  launch_template {
-    id      = aws_launch_template.deepseek_ocr.id
-    version = "$Latest"
-  }
-
-  tag {
-    key                 = "Name"
-    value               = "deepseek-ocr-asg-instance"
-    propagate_at_launch = true
-  }
-
-  tag {
-    key                 = "Environment"
-    value               = "demo"
-    propagate_at_launch = true
-  }
-
-  tag {
-    key                 = "Purpose"
-    value               = "DeepSeek OCR ASG Instance"
-    propagate_at_launch = true
-  }
-}
-
-# Scheduled action to start instances at 9 AM UTC+7 (2 AM UTC)
-resource "aws_autoscaling_schedule" "deepseek_ocr_start" {
-  scheduled_action_name  = "deepseek-ocr-start"
-  min_size               = 0
-  max_size               = 1
-  desired_capacity       = 1
-  recurrence             = "0 2 * * *"
-  autoscaling_group_name = aws_autoscaling_group.deepseek_ocr.name
-}
-
-# Scheduled action to stop instances at 7 PM UTC+7 (12 PM UTC)
-resource "aws_autoscaling_schedule" "deepseek_ocr_stop" {
-  scheduled_action_name  = "deepseek-ocr-stop"
-  min_size               = 0
-  max_size               = 1
-  desired_capacity       = 0
-  recurrence             = "0 12 * * *"
-  autoscaling_group_name = aws_autoscaling_group.deepseek_ocr.name
-}
 
 # Security group for Open WebUI ALB
 resource "aws_security_group" "open_webui_alb" {
@@ -397,39 +342,28 @@ resource "aws_security_group" "open_webui" {
   }
 }
 
-# Launch template for Open WebUI
-resource "aws_launch_template" "open_webui" {
-  name_prefix   = "open-webui-"
-  image_id      = data.aws_ami.ubuntu_gpu.id
-  instance_type = var.open_webui_instance_type
-  key_name      = aws_key_pair.deepseek_ocr.key_name
-
-  iam_instance_profile {
-    name = aws_iam_instance_profile.deepseek_ocr_ssm.name
-  }
-
+# EC2 instance for Open WebUI
+resource "aws_instance" "open_webui" {
+  ami                    = data.aws_ami.ubuntu_gpu.id
+  instance_type          = var.open_webui_instance_type
+  key_name               = aws_key_pair.deepseek_ocr.key_name
+  iam_instance_profile   = aws_iam_instance_profile.deepseek_ocr_ssm.name
   vpc_security_group_ids = [aws_security_group.open_webui.id]
+  user_data = templatefile("${path.module}/open-webui-user-data.sh", {
+    deepseek_ocr_endpoint = "http://${aws_lb.deepseek_ocr.dns_name}:8000"
+  })
 
-  block_device_mappings {
-    device_name = "/dev/sda1"
-    ebs {
-      volume_size           = 30
-      volume_type           = "gp3"
-      delete_on_termination = true
-    }
+  root_block_device {
+    volume_size           = 30
+    volume_type           = "gp3"
+    delete_on_termination = false
   }
 
-  user_data = base64encode(templatefile("${path.module}/open-webui-user-data.sh", {
-    deepseek_ocr_endpoint = "http://${aws_lb.deepseek_ocr.dns_name}:8000"
-  }))
-
-  tag_specifications {
-    resource_type = "instance"
-    tags = {
-      Name        = "open-webui-server"
-      Environment = "demo"
-      Purpose     = "Open WebUI for testing DeepSeek OCR"
-    }
+  tags = {
+    Name        = "open-webui-server"
+    Environment = "demo"
+    Purpose     = "Open WebUI for testing DeepSeek OCR"
+    AutoStop    = "true"
   }
 
   depends_on = [
@@ -450,18 +384,27 @@ resource "aws_lb_target_group" "open_webui" {
   health_check {
     enabled             = true
     healthy_threshold   = 2
-    unhealthy_threshold = 3
+    unhealthy_threshold = 10
     timeout             = 10
     interval            = 30
     path                = "/"
     matcher             = "200"
   }
 
+  deregistration_delay = 30
+
   tags = {
     Name        = "open-webui-tg"
     Environment = "demo"
     Purpose     = "Open WebUI Target Group"
   }
+}
+
+# Attach open-webui instance to target group
+resource "aws_lb_target_group_attachment" "open_webui" {
+  target_group_arn = aws_lb_target_group.open_webui.arn
+  target_id        = aws_instance.open_webui.id
+  port             = 3000
 }
 
 # Application Load Balancer for Open WebUI
@@ -491,57 +434,164 @@ resource "aws_lb_listener" "open_webui" {
   }
 }
 
-# Auto Scaling Group for Open WebUI
-resource "aws_autoscaling_group" "open_webui" {
-  name                      = "open-webui-asg"
-  vpc_zone_identifier       = data.aws_subnets.default.ids
-  target_group_arns         = [aws_lb_target_group.open_webui.arn]
-  health_check_type         = "ELB"
-  health_check_grace_period = 300
-  min_size                  = 0
-  max_size                  = 1
-  desired_capacity          = 1
 
-  launch_template {
-    id      = aws_launch_template.open_webui.id
-    version = "$Latest"
-  }
 
-  tag {
-    key                 = "Name"
-    value               = "open-webui-asg-instance"
-    propagate_at_launch = true
-  }
+# IAM role for Lambda function
+resource "aws_iam_role" "lambda_scheduler" {
+  name = "ec2-scheduler-lambda-role"
 
-  tag {
-    key                 = "Environment"
-    value               = "demo"
-    propagate_at_launch = true
-  }
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
 
-  tag {
-    key                 = "Purpose"
-    value               = "Open WebUI ASG Instance"
-    propagate_at_launch = true
+  tags = {
+    Name        = "ec2-scheduler-lambda-role"
+    Environment = "demo"
+    Purpose     = "Lambda role for EC2 instance scheduling"
   }
 }
 
-# Scheduled action to start instances at 9 AM UTC+7 (2 AM UTC)
-resource "aws_autoscaling_schedule" "open_webui_start" {
-  scheduled_action_name  = "open-webui-start"
-  min_size               = 0
-  max_size               = 1
-  desired_capacity       = 1
-  recurrence             = "0 2 * * *"
-  autoscaling_group_name = aws_autoscaling_group.open_webui.name
+# IAM policy for Lambda to manage EC2 instances
+resource "aws_iam_role_policy" "lambda_scheduler" {
+  name = "ec2-scheduler-policy"
+  role = aws_iam_role.lambda_scheduler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeInstances",
+          "ec2:StopInstances",
+          "ec2:StartInstances"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:*:*:*"
+      }
+    ]
+  })
 }
 
-# Scheduled action to stop instances at 7 PM UTC+7 (12 PM UTC)
-resource "aws_autoscaling_schedule" "open_webui_stop" {
-  scheduled_action_name  = "open-webui-stop"
-  min_size               = 0
-  max_size               = 1
-  desired_capacity       = 0
-  recurrence             = "0 12 * * *"
-  autoscaling_group_name = aws_autoscaling_group.open_webui.name
+# Archive Lambda function code
+data "archive_file" "lambda_scheduler" {
+  type        = "zip"
+  source_file = "${path.module}/lambda_scheduler.py"
+  output_path = "${path.module}/lambda_scheduler.zip"
+}
+
+# Lambda function for EC2 scheduling
+resource "aws_lambda_function" "ec2_scheduler" {
+  filename         = data.archive_file.lambda_scheduler.output_path
+  function_name    = "ec2-instance-scheduler"
+  role             = aws_iam_role.lambda_scheduler.arn
+  handler          = "lambda_scheduler.lambda_handler"
+  source_code_hash = data.archive_file.lambda_scheduler.output_base64sha256
+  runtime          = "python3.11"
+  timeout          = 60
+
+  environment {
+    variables = {
+      TAG_KEY   = "AutoStop"
+      TAG_VALUE = "true"
+    }
+  }
+
+  tags = {
+    Name        = "ec2-instance-scheduler"
+    Environment = "demo"
+    Purpose     = "Scheduled EC2 instance stop/start"
+  }
+}
+
+# CloudWatch Log Group for Lambda
+resource "aws_cloudwatch_log_group" "lambda_scheduler" {
+  name              = "/aws/lambda/${aws_lambda_function.ec2_scheduler.function_name}"
+  retention_in_days = 7
+
+  tags = {
+    Name        = "ec2-scheduler-logs"
+    Environment = "demo"
+  }
+}
+
+# EventBridge rule to stop instances at 7 PM UTC+7 (12 PM UTC)
+resource "aws_cloudwatch_event_rule" "stop_instances" {
+  name                = "stop-instances-7pm-utc7"
+  description         = "Stop EC2 instances at 7 PM UTC+7 (12 PM UTC)"
+  schedule_expression = "cron(0 12 * * ? *)"
+
+  tags = {
+    Name        = "stop-instances-schedule"
+    Environment = "demo"
+  }
+}
+
+# EventBridge target for stop rule
+resource "aws_cloudwatch_event_target" "stop_instances" {
+  rule      = aws_cloudwatch_event_rule.stop_instances.name
+  target_id = "StopEC2Instances"
+  arn       = aws_lambda_function.ec2_scheduler.arn
+
+  input = jsonencode({
+    action = "stop"
+  })
+}
+
+# Lambda permission for stop rule
+resource "aws_lambda_permission" "allow_eventbridge_stop" {
+  statement_id  = "AllowExecutionFromEventBridgeStop"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.ec2_scheduler.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.stop_instances.arn
+}
+
+# EventBridge rule to start instances at 9 AM UTC+7 (2 AM UTC)
+resource "aws_cloudwatch_event_rule" "start_instances" {
+  name                = "start-instances-9am-utc7"
+  description         = "Start EC2 instances at 9 AM UTC+7 (2 AM UTC)"
+  schedule_expression = "cron(0 2 * * ? *)"
+
+  tags = {
+    Name        = "start-instances-schedule"
+    Environment = "demo"
+  }
+}
+
+# EventBridge target for start rule
+resource "aws_cloudwatch_event_target" "start_instances" {
+  rule      = aws_cloudwatch_event_rule.start_instances.name
+  target_id = "StartEC2Instances"
+  arn       = aws_lambda_function.ec2_scheduler.arn
+
+  input = jsonencode({
+    action = "start"
+  })
+}
+
+# Lambda permission for start rule
+resource "aws_lambda_permission" "allow_eventbridge_start" {
+  statement_id  = "AllowExecutionFromEventBridgeStart"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.ec2_scheduler.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.start_instances.arn
 }
