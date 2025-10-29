@@ -982,7 +982,9 @@ fn convert_messages(messages: &[ApiMessage]) -> Result<(String, Vec<DynamicImage
 fn flatten_content(content: &MessageContent) -> Result<(String, Vec<DynamicImage>), ApiError> {
     match content {
         MessageContent::Text(text) => {
-            let processed = ensure_grounding_enabled(text.trim());
+            // Remove any <image> placeholders from the text as they will be added programmatically
+            let cleaned = text.replace("<image>", "");
+            let processed = ensure_grounding_enabled(cleaned.trim());
             Ok((processed, Vec::new()))
         }
         MessageContent::Parts(parts) => {
@@ -996,9 +998,10 @@ fn flatten_content(content: &MessageContent) -> Result<(String, Vec<DynamicImage
                         images.push(load_image(image_url)?);
                     }
                     MessagePart::Text { text } | MessagePart::InputText { text } => {
-                        let trimmed = text.trim();
-                        if !trimmed.is_empty() {
-                            text_parts.push(trimmed);
+                        // Remove any <image> placeholders from the text as they will be added programmatically
+                        let cleaned = text.replace("<image>", "").trim().to_string();
+                        if !cleaned.is_empty() {
+                            text_parts.push(cleaned);
                         }
                     }
                 }
