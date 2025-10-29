@@ -4,11 +4,11 @@
 /// or <ref>text</ref><box>[[x1,y1],[x2,y2]]</box>
 
 use anyhow::{Result, anyhow};
-use image::{DynamicImage, Rgba, RgbaImage};
+use image::{DynamicImage, Rgba};
 use imageproc::drawing::{draw_hollow_rect_mut, draw_text_mut};
 use imageproc::rect::Rect;
 use regex::Regex;
-use ab_glyph::{FontRef, PxScale};
+use rusttype::{Font, Scale};
 use serde::{Deserialize, Serialize};
 
 /// A bounding box with optional reference text
@@ -140,10 +140,10 @@ pub fn draw_bounding_boxes(
     
     // Load a basic font (embedded in the binary)
     let font_data = include_bytes!("../../../assets/DejaVuSans.ttf");
-    let font = FontRef::try_from_slice(font_data)
-        .map_err(|e| anyhow!("failed to load font: {}", e))?;
+    let font = Font::try_from_bytes(font_data)
+        .ok_or_else(|| anyhow!("failed to load font"))?;
     
-    let scale = PxScale::from(16.0);
+    let scale = Scale::uniform(16.0);
     
     // Color palette for boxes
     let colors = [
